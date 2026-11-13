@@ -34,7 +34,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- FILTER 1: MIME Types Only -->
+            <!--
+                The app must only be offered for FITS files, never as a generic
+                "open anything" handler. So there is deliberately no */* or
+                application/octet-stream filter without a file-name check.
+            -->
+
+            <!-- FILTER 1: Real FITS MIME types (any file name) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -43,53 +49,151 @@
                 <data android:scheme="content" />
                 <data android:mimeType="image/fits" />
                 <data android:mimeType="application/fits" />
-                <data android:mimeType="application/octet-stream" />
-                <data android:mimeType="*/*" />
+                <data android:mimeType="image/x-fits" />
+                <data android:mimeType="application/x-fits" />
             </intent-filter>
 
-            <!-- FILTER 2: File Scheme Extension Matching -->
-            <intent-filter>
+            <!--
+                FILTER 2: Any MIME type (many file managers report FITS as
+                application/octet-stream), but ONLY when the file name ends in
+                .fits / .fit / .fts. MIME type and path must both match.
+            -->
+            <intent-filter tools:ignore="AppLinkUrlError">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="file" />
+                <data android:scheme="content" />
                 <data android:host="*" />
-                <!-- .fits extensions -->
+                <data android:mimeType="*/*" />
+                <data android:pathSuffix=".fits" />
+                <data android:pathSuffix=".fit" />
+                <data android:pathSuffix=".fts" />
+                <data android:pathSuffix=".FITS" />
+                <data android:pathSuffix=".FIT" />
+                <data android:pathSuffix=".FTS" />
+                <data android:pathSuffix=".Fits" />
+                <data android:pathSuffix=".Fit" />
+                <data android:pathSuffix=".Fts" />
                 <data android:pathPattern=".*\\.fits" />
-                <data android:pathPattern=".*\\.FITS" />
-                <data android:pathPattern=".*\\..*\\.fits" />
-                <data android:pathPattern=".*\\..*\\.FITS" />
-                <!-- .fit extensions -->
                 <data android:pathPattern=".*\\.fit" />
+                <data android:pathPattern=".*\\.fts" />
+                <data android:pathPattern=".*\\.FITS" />
                 <data android:pathPattern=".*\\.FIT" />
+                <data android:pathPattern=".*\\.FTS" />
+                <data android:pathPattern=".*\\.Fits" />
+                <data android:pathPattern=".*\\.Fit" />
+                <data android:pathPattern=".*\\.Fts" />
+                <data android:pathPattern=".*\\..*\\.fits" />
                 <data android:pathPattern=".*\\..*\\.fit" />
+                <data android:pathPattern=".*\\..*\\.fts" />
+                <data android:pathPattern=".*\\..*\\.FITS" />
                 <data android:pathPattern=".*\\..*\\.FIT" />
+                <data android:pathPattern=".*\\..*\\.FTS" />
+                <data android:pathPattern=".*\\..*\\.Fits" />
+                <data android:pathPattern=".*\\..*\\.Fit" />
+                <data android:pathPattern=".*\\..*\\.Fts" />
+                <data android:pathPattern=".*\\..*\\..*\\.fits" />
+                <data android:pathPattern=".*\\..*\\..*\\.fit" />
+                <data android:pathPattern=".*\\..*\\..*\\.fts" />
+                <data android:pathPattern=".*\\..*\\..*\\.FITS" />
+                <data android:pathPattern=".*\\..*\\..*\\.FIT" />
+                <data android:pathPattern=".*\\..*\\..*\\.FTS" />
+                <data android:pathPattern=".*\\..*\\..*\\.Fits" />
+                <data android:pathPattern=".*\\..*\\..*\\.Fit" />
+                <data android:pathPattern=".*\\..*\\..*\\.Fts" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.fits" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.fit" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.fts" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.FITS" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.FIT" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.FTS" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.Fits" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.Fit" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.Fts" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.fits" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.fit" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.fts" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.FITS" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.FIT" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.FTS" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.Fits" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.Fit" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.Fts" />
             </intent-filter>
 
-            <!-- FILTER 3: Content Scheme Extension Matching -->
-            <intent-filter>
+            <!-- FILTER 3: Same file-name check for intents sent without a MIME type -->
+            <intent-filter tools:ignore="AppLinkUrlError">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="file" />
                 <data android:scheme="content" />
                 <data android:host="*" />
-                <!-- .fits extensions -->
+                <data android:pathSuffix=".fits" />
+                <data android:pathSuffix=".fit" />
+                <data android:pathSuffix=".fts" />
+                <data android:pathSuffix=".FITS" />
+                <data android:pathSuffix=".FIT" />
+                <data android:pathSuffix=".FTS" />
+                <data android:pathSuffix=".Fits" />
+                <data android:pathSuffix=".Fit" />
+                <data android:pathSuffix=".Fts" />
                 <data android:pathPattern=".*\\.fits" />
-                <data android:pathPattern=".*\\.FITS" />
-                <data android:pathPattern=".*\\..*\\.fits" />
-                <data android:pathPattern=".*\\..*\\.FITS" />
-                <!-- .fit extensions -->
                 <data android:pathPattern=".*\\.fit" />
+                <data android:pathPattern=".*\\.fts" />
+                <data android:pathPattern=".*\\.FITS" />
                 <data android:pathPattern=".*\\.FIT" />
+                <data android:pathPattern=".*\\.FTS" />
+                <data android:pathPattern=".*\\.Fits" />
+                <data android:pathPattern=".*\\.Fit" />
+                <data android:pathPattern=".*\\.Fts" />
+                <data android:pathPattern=".*\\..*\\.fits" />
                 <data android:pathPattern=".*\\..*\\.fit" />
+                <data android:pathPattern=".*\\..*\\.fts" />
+                <data android:pathPattern=".*\\..*\\.FITS" />
                 <data android:pathPattern=".*\\..*\\.FIT" />
+                <data android:pathPattern=".*\\..*\\.FTS" />
+                <data android:pathPattern=".*\\..*\\.Fits" />
+                <data android:pathPattern=".*\\..*\\.Fit" />
+                <data android:pathPattern=".*\\..*\\.Fts" />
+                <data android:pathPattern=".*\\..*\\..*\\.fits" />
+                <data android:pathPattern=".*\\..*\\..*\\.fit" />
+                <data android:pathPattern=".*\\..*\\..*\\.fts" />
+                <data android:pathPattern=".*\\..*\\..*\\.FITS" />
+                <data android:pathPattern=".*\\..*\\..*\\.FIT" />
+                <data android:pathPattern=".*\\..*\\..*\\.FTS" />
+                <data android:pathPattern=".*\\..*\\..*\\.Fits" />
+                <data android:pathPattern=".*\\..*\\..*\\.Fit" />
+                <data android:pathPattern=".*\\..*\\..*\\.Fts" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.fits" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.fit" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.fts" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.FITS" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.FIT" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.FTS" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.Fits" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.Fit" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.Fts" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.fits" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.fit" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.fts" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.FITS" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.FIT" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.FTS" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.Fits" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.Fit" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.Fts" />
             </intent-filter>
 
-            <!-- Share Intent Filter -->
+            <!-- Share: only for FITS MIME types -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="*/*" />
+                <data android:mimeType="image/fits" />
+                <data android:mimeType="application/fits" />
+                <data android:mimeType="image/x-fits" />
+                <data android:mimeType="application/x-fits" />
             </intent-filter>
 
         </activity>

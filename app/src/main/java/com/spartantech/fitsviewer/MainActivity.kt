@@ -57,6 +57,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
@@ -421,7 +422,50 @@ private interface DirectAccessor {
     fun get(x: Int, y: Int, plane: Int): Float
 }
 
-data class ChannelStats(val min: Float, val max: Float, val midtones: Float)
+private const val STATS_TARGET_SAMPLES = 400_000.0
+
+/** Growable primitive float buffer; ignores NaN / infinite values. */
+private class SampleBuffer(capacity: Int) {
+    private var data = FloatArray(max(16, capacity))
+    private var size = 0
+
+    fun add(v: Float) {
+        if (v.isNaN() || v.isInfinite()) return
+        if (size == data.size) data = data.copyOf(size * 2)
+        data[size++] = v
+    }
+
+    fun sorted(): FloatArray {
+        val out = data.copyOf(size)
+        out.sort()
+        return out
+    }
+}
+
+/** Position of each colour inside the 2x2 colour filter array cell. */
+private class BayerLayout(
+    val rx: Int, val ry: Int,
+    val g1x: Int, val g1y: Int,
+    val g2x: Int, val g2y: Int,
+    val bx: Int, val by: Int
+) {
+    /** Even coordinate of the 2x2 cell containing [p], kept fully inside the image. */
+    fun cellOrigin(p: Int, size: Int): Int {
+        if (size < 2) return 0
+        val o = p and 1.inv()
+        return if (o + 1 >= size) o - 2 else o
+    }
+
+    companion object {
+        fun fromPattern(pattern: String?): BayerLayout? = when (pattern) {
+            "RGGB" -> BayerLayout(0, 0, 1, 0, 0, 1, 1, 1)
+            "BGGR" -> BayerLayout(1, 1, 1, 0, 0, 1, 0, 0)
+            "GRBG" -> BayerLayout(1, 0, 0, 0, 1, 1, 0, 1)
+            "GBRG" -> BayerLayout(0, 1, 0, 0, 1, 1, 1, 0)
+            else -> null
+        }
+    }
+}
 
 suspend fun renderBitmap(hdu: ImageHDU, useAutoStretch: Boolean, logger: (String) -> Unit): Pair<Bitmap, String>? {
     try {
@@ -448,7 +492,8 @@ suspend fun renderBitmap(hdu: ImageHDU, useAutoStretch: Boolean, logger: (String
         if (bayerPat.isNullOrEmpty()) bayerPat = header.getStringValue("XBAYERPAT")
         if (bayerPat.isNullOrEmpty()) bayerPat = header.getStringValue("CFA")
         bayerPat = bayerPat?.replace("'", "")?.replace("\"", "")?.trim()?.uppercase()
-        val isBayer = (!is3dRGB && bayerPat != null && bayerPat.length == 4)
+        val bayerLayout = if (is3dRGB || trueWidth < 2 || trueHeight < 2) null else BayerLayout.fromPattern(bayerPat)
+        val isBayer = bayerLayout != null
 
         val patternName = when {
             is3dRGB -> "RGB 3D"
@@ -467,11 +512,14 @@ suspend fun renderBitmap(hdu: ImageHDU, useAutoStretch: Boolean, logger: (String
         // --- PASS 1: STATISTICS PER CHANNEL ---
         logger("Calculating Stats...")
 
-        val samplesR = ArrayList<Float>(20000)
-        val samplesG = ArrayList<Float>(20000)
-        val samplesB = ArrayList<Float>(20000)
+        // Sample on a regular grid, aiming for a few hundred thousand points so that
+        // the median / MAD estimates are stable for any image size.
+        val stride = max(1, ceil(sqrt(width.toDouble() * height / STATS_TARGET_SAMPLES)).toInt())
+        val expected = (width / stride + 1) * (height / stride + 1)
 
-        val stride = max(1, (width * height) / 50000)
+        val samplesR = SampleBuffer(if (is3dRGB || isBayer) expected else 0)
+        val samplesG = SampleBuffer(if (isBayer) expected * 2 else expected)
+        val samplesB = SampleBuffer(if (is3dRGB || isBayer) expected else 0)
 
         var y = 0
         while (y < height) {
@@ -481,93 +529,58 @@ suspend fun renderBitmap(hdu: ImageHDU, useAutoStretch: Boolean, logger: (String
                 val sy = y * sampleSize
 
                 if (is3dRGB) {
-                    val r = accessor.get(sx, sy, 0)
-                    val g = accessor.get(sx, sy, 1)
-                    val b = accessor.get(sx, sy, 2)
-                    if(!r.isNaN()) samplesR.add(r)
-                    if(!g.isNaN()) samplesG.add(g)
-                    if(!b.isNaN()) samplesB.add(b)
-                } else if (isBayer) {
-                    val isEvenRow = (sy % 2 == 0)
-                    val isEvenCol = (sx % 2 == 0)
-
-                    val v = accessor.get(sx, sy, 0)
-                    if (!v.isNaN()) {
-                        val colorType = when {
-                            bayerPat == "RGGB" -> if (isEvenRow) (if (isEvenCol) 0 else 1) else (if (isEvenCol) 1 else 2)
-                            bayerPat == "BGGR" -> if (isEvenRow) (if (isEvenCol) 2 else 1) else (if (isEvenCol) 1 else 0)
-                            bayerPat == "GRBG" -> if (isEvenRow) (if (isEvenCol) 1 else 0) else (if (isEvenCol) 2 else 1)
-                            bayerPat == "GBRG" -> if (isEvenRow) (if (isEvenCol) 1 else 2) else (if (isEvenCol) 0 else 1)
-                            else -> 1
-                        }
-                        when (colorType) {
-                            0 -> samplesR.add(v)
-                            2 -> samplesB.add(v)
-                            else -> samplesG.add(v)
-                        }
-                    }
+                    samplesR.add(accessor.get(sx, sy, 0))
+                    samplesG.add(accessor.get(sx, sy, 1))
+                    samplesB.add(accessor.get(sx, sy, 2))
+                } else if (bayerLayout != null) {
+                    // Take the whole 2x2 CFA cell so every colour is sampled,
+                    // whatever the stride is.
+                    val ox = bayerLayout.cellOrigin(sx, trueWidth)
+                    val oy = bayerLayout.cellOrigin(sy, trueHeight)
+                    samplesR.add(accessor.get(ox + bayerLayout.rx, oy + bayerLayout.ry, 0))
+                    samplesG.add(accessor.get(ox + bayerLayout.g1x, oy + bayerLayout.g1y, 0))
+                    samplesG.add(accessor.get(ox + bayerLayout.g2x, oy + bayerLayout.g2y, 0))
+                    samplesB.add(accessor.get(ox + bayerLayout.bx, oy + bayerLayout.by, 0))
                 } else {
-                    val v = accessor.get(sx, sy, 0)
-                    if (!v.isNaN()) samplesG.add(v)
+                    samplesG.add(accessor.get(sx, sy, 0))
                 }
                 x += stride
             }
             y += stride
         }
 
-        fun calcChannelStats(samples: ArrayList<Float>): ChannelStats {
-            if (samples.isEmpty()) return ChannelStats(0f, 65535f, 0.5f)
-            samples.sort()
+        val sortedR = samplesR.sorted()
+        val sortedG = samplesG.sorted()
+        val sortedB = samplesB.sorted()
 
-            val minVal: Float
-            val maxVal: Float
-            var midtones = 0.5f
+        val rStats: ChannelStats
+        val gStats: ChannelStats
+        val bStats: ChannelStats
 
-            val actualMin = samples.first()
-            val actualMax = samples.last()
-
-            if (useAutoStretch) {
-                val median = samples[samples.size / 2]
-                val deviations = ArrayList<Float>(samples.size)
-                for(s in samples) deviations.add(abs(s - median))
-                deviations.sort()
-                val mad = deviations[deviations.size / 2]
-
-                var shadows = median - (2.8f * mad)
-                if (shadows < actualMin) shadows = actualMin
-                minVal = shadows
-
-                val highIdx = (samples.size * 0.9995).toInt().coerceIn(0, samples.lastIndex)
-                maxVal = samples[highIdx]
-
-                val targetBg = 0.10f
-                val range = maxVal - minVal
-
-                if (range > 0.0001f) {
-                    val normMed = (median - minVal) / range
-                    if (normMed > 0f && normMed < 1f) {
-                        val x = normMed
-                        val L = targetBg
-                        midtones = (x * (L - 1f)) / (2f * x * L - x - L)
-                    }
-                }
-            } else {
-                if (actualMax <= 1.0f) {
-                    minVal = 0f; maxVal = 1f
-                } else {
-                    minVal = 0f; maxVal = 65535f
+        if (useAutoStretch) {
+            // Unlinked auto stretch: all channels share the same data range, but each
+            // one gets its own shadows clipping point and midtones balance.
+            var lo = Float.POSITIVE_INFINITY
+            var hi = Float.NEGATIVE_INFINITY
+            for (arr in arrayOf(sortedR, sortedG, sortedB)) {
+                if (arr.isNotEmpty()) {
+                    lo = min(lo, arr.first())
+                    hi = max(hi, arr.last())
                 }
             }
-            return ChannelStats(minVal, maxVal, midtones)
+            if (lo > hi) { lo = 0f; hi = 1f }
+
+            gStats = autoStretchStats(sortedG, lo, hi)
+            rStats = if (sortedR.isEmpty()) gStats else autoStretchStats(sortedR, lo, hi)
+            bStats = if (sortedB.isEmpty()) gStats else autoStretchStats(sortedB, lo, hi)
+        } else {
+            var actualMax = Float.NEGATIVE_INFINITY
+            for (arr in arrayOf(sortedR, sortedG, sortedB)) {
+                if (arr.isNotEmpty()) actualMax = max(actualMax, arr.last())
+            }
+            val linear = if (actualMax <= 1.0f) ChannelStats(0f, 1f, 0.5f) else ChannelStats(0f, 65535f, 0.5f)
+            rStats = linear; gStats = linear; bStats = linear
         }
-
-        val statsR = calcChannelStats(samplesR)
-        val statsG = calcChannelStats(samplesG)
-        val statsB = calcChannelStats(samplesB)
-
-        val rStats = if (samplesR.isEmpty()) statsG else statsR
-        val gStats = statsG
-        val bStats = if (samplesB.isEmpty()) statsG else statsB
 
         logger("R: ${rStats.min}..${rStats.max} m=${String.format("%.3f", rStats.midtones)}")
         logger("G: ${gStats.min}..${gStats.max} m=${String.format("%.3f", gStats.midtones)}")
@@ -596,43 +609,27 @@ suspend fun renderBitmap(hdu: ImageHDU, useAutoStretch: Boolean, logger: (String
                                 pixels[idx] = AndroidColor.rgb(r, g, b)
                             }
                         }
-                    } else if (isBayer) {
+                    } else if (bayerLayout != null) {
                         for (yLoop in startY until endY) {
                             for (xLoop in 0 until width) {
                                 val sx = xLoop * sampleSize
                                 val sy = yLoop * sampleSize
                                 val idx = yLoop * width + xLoop
 
-                                val isEvenRow = (sy % 2 == 0); val isEvenCol = (sx % 2 == 0)
-                                val center = accessor.get(sx, sy, 0)
+                                // Colour comes from the 2x2 CFA cell this pixel belongs to,
+                                // so each value is always stretched with its own channel's
+                                // parameters.
+                                val ox = bayerLayout.cellOrigin(sx, trueWidth)
+                                val oy = bayerLayout.cellOrigin(sy, trueHeight)
 
-                                var rVal = 0f; var gVal = 0f; var bVal = 0f
-
-                                // Fast integer lookup for Bayer pattern (0=R, 1=G, 2=B)
-                                val colorType = when {
-                                    bayerPat == "RGGB" -> if (isEvenRow) (if (isEvenCol) 0 else 1) else (if (isEvenCol) 1 else 2)
-                                    bayerPat == "BGGR" -> if (isEvenRow) (if (isEvenCol) 2 else 1) else (if (isEvenCol) 1 else 0)
-                                    bayerPat == "GRBG" -> if (isEvenRow) (if (isEvenCol) 1 else 0) else (if (isEvenCol) 2 else 1)
-                                    bayerPat == "GBRG" -> if (isEvenRow) (if (isEvenCol) 1 else 2) else (if (isEvenCol) 0 else 1)
-                                    else -> 1
-                                }
-
-                                when (colorType) {
-                                    0 -> { // Red
-                                        rVal = center
-                                        gVal = accessor.get(min(trueWidth-1, sx+1), sy, 0)
-                                        bVal = accessor.get(min(trueWidth-1, sx+1), min(trueHeight-1, sy+1), 0)
-                                    }
-                                    2 -> { // Blue
-                                        bVal = center
-                                        gVal = accessor.get(min(trueWidth-1, sx+1), sy, 0)
-                                        rVal = accessor.get(max(0, sx-1), max(0, sy-1), 0)
-                                    }
-                                    else -> { // Green
-                                        gVal = center
-                                        rVal = accessor.get(min(trueWidth-1, sx+1), sy, 0)
-                                        bVal = accessor.get(sx, min(trueHeight-1, sy+1), 0)
-                                    }
+                                val rVal = accessor.get(ox + bayerLayout.rx, oy + bayerLayout.ry, 0)
+                                val bVal = accessor.get(ox + bayerLayout.bx, oy + bayerLayout.by, 0)
+                                val g1 = accessor.get(ox + bayerLayout.g1x, oy + bayerLayout.g1y, 0)
+                                val g2 = accessor.get(ox + bayerLayout.g2x, oy + bayerLayout.g2y, 0)
+                                val gVal = when {
+                                    g1.isNaN() -> g2
+                                    g2.isNaN() -> g1
+                                    else -> (g1 + g2) * 0.5f
                                 }
 
                                 pixels[idx] = AndroidColor.rgb(
